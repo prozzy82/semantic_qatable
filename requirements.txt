@@ -4,6 +4,7 @@ langchain
 langchain-community
 langchain-openai
 langchain-qdrant
+langchain_huggingface
 qdrant-client
 sentence-transformers
 huggingface-hub

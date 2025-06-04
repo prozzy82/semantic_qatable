@@ -9,9 +9,9 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 import qdrant_client
 import re
-from sentence_transformers import CrossEncoder # <--- Добавляем импорт
+from sentence_transformers import CrossEncoder
 
-# ... (остальные импорты и загрузка env) ...
+# Загрузка переменных окружения
 load_dotenv(dotenv_path=".env")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
@@ -26,7 +26,8 @@ def get_embeddings():
         encode_kwargs={'normalize_embeddings': True}
     )
 
-embeddings = get_embeddings()
+# 1. СОЗДАЕМ ЭКЗЕМПЛЯР МОДЕЛИ ЭМБЕДДИНГОВ
+embeddings_instance = get_embeddings()
 
 @st.cache_resource
 def get_qdrant_client():
@@ -34,27 +35,27 @@ def get_qdrant_client():
         url=QDRANT_URL, api_key=QDRANT_API_KEY, prefer_grpc=False
     )
 
+# 2. СОЗДАЕМ ЭКЗЕМПЛЯР КЛИЕНТА QDRANT
 qdrant_client_instance = get_qdrant_client()
 
 @st.cache_resource
 def get_vector_store():
+    # Эта функция теперь будет видеть определенную ранее embeddings_instance
     return QdrantVectorStore(
         client=qdrant_client_instance,
         collection_name=COLLECTION_NAME,
-        embedding=embeddings_instance,
+        embedding=embeddings_instance, # Используем глобально определенную embeddings_instance
     )
 
+# 3. СОЗДАЕМ ЭКЗЕМПЛЯР ВЕКТОРНОГО ХРАНИЛИЩА
 vector_store = get_vector_store()
 
 # Инициализация модели Cross-Encoder для переранжирования
 @st.cache_resource
 def get_reranker():
-    # Можете попробовать 'cross-encoder/ms-marco-MiniLM-L-6-v2' (более легкая, но англоязычная)
-    # или 'sentence-transformers/mmarco-mMiniLMv2-L12-H384-v1' (мультиязычная, лучше для русского)
-    # или другие доступные мультиязычные/русскоязычные кросс-энкодеры
     model_name = 'sentence-transformers/mmarco-mMiniLMv2-L12-H384-v1'
     try:
-        model = CrossEncoder(model_name, device='cpu') # Укажите device, если нужно
+        model = CrossEncoder(model_name, device='cpu')
         return model
     except Exception as e:
         st.error(f"Не удалось загрузить модель reranker: {e}")
@@ -62,6 +63,7 @@ def get_reranker():
 
 reranker = get_reranker()
 
+# ... (остальная часть вашего кода: extract_structured_info, find_relevant_situations, интерфейс Streamlit) ...
 def extract_structured_info(page_content_text, metadata):
     source = metadata.get("source", "Источник не указан")
     section = "Раздел не определен"
@@ -108,14 +110,12 @@ def extract_structured_info(page_content_text, metadata):
     }
 
 # Функция для поиска релевантных ситуаций с переранжированием
-def find_relevant_situations(query, initial_top_k=20, final_top_k=7): # Берем больше кандидатов, возвращаем меньше
-    # 1. Первичный поиск в Qdrant
+def find_relevant_situations(query, initial_top_k=20, final_top_k=7):
     docs_with_scores_qdrant = vector_store.similarity_search_with_score(query, k=initial_top_k)
     
     if not docs_with_scores_qdrant:
         return []
 
-    # Если reranker не загрузился, возвращаем результаты Qdrant как есть (топ final_top_k)
     if reranker is None:
         st.warning("Модель переранжирования не загружена. Результаты могут быть менее точными.")
         results_no_rerank = []
@@ -125,21 +125,16 @@ def find_relevant_situations(query, initial_top_k=20, final_top_k=7): # Бере
             results_no_rerank.append(info)
         return results_no_rerank
 
-    # 2. Подготовка данных для переранжировщика
     sentence_pairs = []
-    # Сохраняем исходные документы для последующего использования метаданных
     candidate_docs_map = {} 
     for idx, (doc, qdrant_score) in enumerate(docs_with_scores_qdrant):
         sentence_pairs.append([query, doc.page_content])
         candidate_docs_map[idx] = (doc, qdrant_score)
 
-
-    # 3. Получение оценок от Cross-Encoder
     try:
         reranker_scores = reranker.predict(sentence_pairs, convert_to_tensor=True)
     except Exception as e:
         st.error(f"Ошибка при переранжировании: {e}")
-        # В случае ошибки возвращаем результаты Qdrant
         results_fallback = []
         for doc, score in docs_with_scores_qdrant[:final_top_k]:
             info = extract_structured_info(doc.page_content, doc.metadata)
@@ -147,20 +142,15 @@ def find_relevant_situations(query, initial_top_k=20, final_top_k=7): # Бере
             results_fallback.append(info)
         return results_fallback
 
-    # 4. Сборка результатов с новыми оценками
     reranked_docs_with_new_scores = []
     for i in range(len(sentence_pairs)):
         original_doc, original_qdrant_score = candidate_docs_map[i]
         info = extract_structured_info(original_doc.page_content, original_doc.metadata)
-        # Используем reranker_score как основной. Qdrant score можно сохранить для анализа, если нужно.
         info["score"] = reranker_scores[i].item() 
-        # info["qdrant_score"] = original_qdrant_score # Для отладки
         reranked_docs_with_new_scores.append(info)
         
-    # 5. Сортировка по убыванию reranker_score
     reranked_docs_with_new_scores.sort(key=lambda x: x["score"], reverse=True)
     
-    # 6. Возврат топ-N результатов после переранжирования
     return reranked_docs_with_new_scores[:final_top_k]
 
 
@@ -180,7 +170,6 @@ if st.button("Найти ситуации"):
         st.warning("Пожалуйста, опишите вашу ситуацию")
     else:
         with st.spinner("Идет поиск и анализ релевантных наименований..."):
-            # Увеличим initial_top_k до 25, а final_top_k оставим 7 или 10 по вашему желанию
             situations = find_relevant_situations(query, initial_top_k=25, final_top_k=7) 
             
             if not situations:
@@ -199,7 +188,6 @@ if st.button("Найти ситуации"):
                         </i>
                     </div>
                     """
-                    # <i>(Qdrant: {sit.get('qdrant_score', 'N/A'):.2f})</i> # Если хотите видеть и старый скор
                     st.markdown(details_html, unsafe_allow_html=True)
                     if i < len(situations):
                         st.divider()
@@ -210,7 +198,9 @@ if st.button("Найти ситуации"):
 st.sidebar.title("О системе")
 st.sidebar.info(
     """
-    test
+    Эта система выполняет поиск релевантных наименований
+    пунктов спорных налоговых ситуаций из базы знаний,
+    используя семантический поиск и переранжирование.
     """
 )
 st.sidebar.divider()

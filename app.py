@@ -53,7 +53,7 @@ vector_store = get_vector_store()
 # Инициализация модели Cross-Encoder для переранжирования
 @st.cache_resource
 def get_reranker():
-    model_name = 'sentence-transformers/mmarco-mMiniLMv2-L12-H384-v1'
+    model_name = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
     try:
         model = CrossEncoder(model_name, device='cpu')
         return model

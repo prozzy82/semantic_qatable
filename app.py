@@ -139,7 +139,7 @@ if st.button("Найти ситуации"):
         st.warning("Пожалуйста, опишите вашу ситуацию")
     else:
         with st.spinner("Идет поиск релевантных наименований..."):
-            situations = find_relevant_situations(query, top_k=5)
+            situations = find_relevant_situations(query, top_k=10)
             
             if not situations:
                 st.error("Не найдено релевантных наименований пунктов для вашего запроса. Попробуйте переформулировать запрос.")

@@ -64,80 +64,68 @@ def get_llm():
 
 llm = get_llm()
 
-# Функция для извлечения структурированной информации из метаданных
-def extract_structured_info(metadata):
-    """Извлекает раздел, пункт и название из метаданных документа"""
-    # Пример формата: "Наименование раздела, пункт 2.1.: Наименование пункта"
-    source = metadata.get("source", "")
-    content = metadata.get("content", "")
-    
-    # Пытаемся извлечь структурированную информацию
-    section = metadata.get("section", "")
-    point = metadata.get("point", "")
-    title = metadata.get("title", "")
-    
-    # Если в метаданных нет явных полей, пробуем парсить из текста
-    if not section or not point:
-        # Ищем паттерны типа "Раздел" или "пункт X.X."
-        section_match = re.search(r"Раздел\s*([\d.]+)", content or "")
-        point_match = re.search(r"Пункт\s*([\d.]+)", content or "")
+# Функция для извлечения структурированной информации
+def extract_structured_info(page_content_text, metadata):
+    """Извлекает раздел, пункт и название из page_content и source из metadata"""
+    source = metadata.get("source", "Источник не указан")
+    section = "Не определен"
+    point = "Не определен"
+    # "Наименование пункта" мы будем считать то, что извлекается как title
+    title = page_content_text # По умолчанию, если парсинг не удался
+
+    # Пример вашего формата: "Раздел: Б1. Расходы ... Пункт оглавления: 24. Учет расходов ..."
+    match = re.search(
+        r"Раздел:\s*(?P<section>[^П]+?)\s*Пункт оглавления:\s*(?P<point_num>\d+(\.\d+)*)\.?\s*(?P<title>.+)",
+        page_content_text,
+        re.IGNORECASE
+    )
+    if match:
+        section = match.group("section").strip()
+        point = match.group("point_num").strip()
+        title_candidate = match.group("title").strip()
+        # Проверяем, не начинается ли title с номера пункта, и если да, то удаляем его
+        if title_candidate.lower().startswith(point.lower()):
+             title = title_candidate[len(point):].strip(". ")
+        else:
+             title = title_candidate
+    elif page_content_text:
+        # Альтернативные, более простые regex, если основной не сработал
+        point_match = re.search(r"Пункт оглавления[:\s]*(\d+(\.\d+)*)", page_content_text, re.IGNORECASE)
+        title_match = re.search(r"Пункт оглавления[:\s]*\d+(\.\d+)*\.?\s*(.+)", page_content_text, re.IGNORECASE)
+
+        if point_match and point_match.group(1):
+            point = point_match.group(1).strip()
+        if title_match and title_match.group(1):
+            title = title_match.group(1).strip()
+        elif page_content_text:
+            title = page_content_text[:150] + "..." if len(page_content_text) > 150 else page_content_text
         
-        if section_match:
-            section = section_match.group(1)
-        if point_match:
-            point = point_match.group(1)
-    
-    # Если название не найдено, используем начало контента
-    if not title and content:
-        title = content[:100] + "..." if len(content) > 100 else content
-    
+        # Попробуем извлечь раздел отдельно, если он есть
+        section_match = re.search(r"Раздел[:\s]*(.*?)(Пункт оглавления|$)", page_content_text, re.IGNORECASE | re.DOTALL)
+        if section_match and section_match.group(1):
+            section = section_match.group(1).strip().rstrip(',')
+
     return {
         "section": section,
         "point": point,
-        "title": title,
-        "source": source
+        "title": title, # Это будет "наименование пункта спорной ситуации"
+        "source": source,
+        "full_content": page_content_text
     }
 
 # Функция для поиска релевантных ситуаций
 def find_relevant_situations(query, top_k=5):
     """Поиск релевантных спорных ситуаций по запросу"""
-    # Поиск похожих документов в векторной базе
-    docs = vector_store.similarity_search(query, k=top_k)
+    docs_with_scores = vector_store.similarity_search_with_score(query, k=top_k)
     
-    # Извлечение структурированной информации
     results = []
-    for doc in docs:
-        info = extract_structured_info(doc.metadata)
-        info["score"] = doc.metadata.get("score", 0)  # Оценка релевантности
+    for doc, score in docs_with_scores:
+        info = extract_structured_info(doc.page_content, doc.metadata)
+        info["score"] = score
         results.append(info)
     
+    results.sort(key=lambda x: x["score"], reverse=True) # Qdrant обычно возвращает уже отсортированными
     return results
-
-# Функция для генерации отчета по найденным ситуациям
-def generate_situation_report(situations, query):
-    """Генерирует структурированный отчет с помощью LLM"""
-    # Формируем контекст для LLM
-    context = "Найдены следующие релевантные спорные ситуации:\n"
-    for i, sit in enumerate(situations, 1):
-        context += f"{i}. Раздел: {sit['section']}, Пункт: {sit['point']}, Название: {sit['title']}\n"
-    
-    # Промпт для LLM
-    prompt = f"""
-    Пользователь описал следующую ситуацию: 
-    "{query}"
-    
-    {context}
-    
-    Проанализируй найденные спорные ситуации и составь отчет в следующем формате:
-    1. Для каждой ситуации укажи:
-       - номер пункта
-       - наименование ситуации из оглавления
-    2. Отвечай только на русском языке.
-    """
-    
-    # Генерация ответа
-    response = llm.invoke(prompt)
-    return response.content
 
 # --- Интерфейс Streamlit ---
 st.title("🔍 Поиск релевантных спорных налоговых ситуаций")

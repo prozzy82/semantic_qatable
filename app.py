@@ -52,64 +52,69 @@ def get_vector_store():
 
 vector_store = get_vector_store()
 
-# Инициализация LLM для анализа результатов
-@st.cache_resource
-def get_llm():
-    return ChatOpenAI(
-        model_name="deepseek/deepseek-r1-0528",
-        openai_api_key=PROVIDER_API_KEY,
-        openai_api_base="https://api.novita.ai/v3/openai",
-        temperature=0.3
-    )
-
-llm = get_llm()
-
 # Функция для извлечения структурированной информации
 def extract_structured_info(page_content_text, metadata):
     """Извлекает раздел, пункт и название из page_content и source из metadata"""
     source = metadata.get("source", "Источник не указан")
-    section = "Не определен"
-    point = "Не определен"
-    # "Наименование пункта" мы будем считать то, что извлекается как title
-    title = page_content_text # По умолчанию, если парсинг не удался
+    # Значения по умолчанию
+    section = "Раздел не определен"
+    point = "Пункт не определен"
+    title = page_content_text # В худшем случае, если ничего не распарсится
 
-    # Пример вашего формата: "Раздел: Б1. Расходы ... Пункт оглавления: 24. Учет расходов ..."
-    match = re.search(
-        r"Раздел:\s*(?P<section>[^П]+?)\s*Пункт оглавления:\s*(?P<point_num>\d+(\.\d+)*)\.?\s*(?P<title>.+)",
-        page_content_text,
-        re.IGNORECASE
+    # Основной regex для извлечения структурированных данных
+    # Ожидаемый формат: "Раздел: [ТЕКСТ_РАЗДЕЛА] Пункт оглавления: [НОМЕР_ПУНКТА опц_точка] [ТЕКСТ_НАЗВАНИЯ_ПУНКТА]"
+    pattern = re.compile(
+        r"Раздел:\s*(?P<section>.*?)\s*"
+        r"Пункт оглавления:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?" # Номер пункта, может содержать точки, заканчивается цифрой
+        r"\s*(?P<title>.*)", # Все остальное - название, включая пробелы после точки, если они есть
+        re.IGNORECASE | re.DOTALL # DOTALL чтобы .* захватывал и переносы строк
     )
-    if match:
-        section = match.group("section").strip()
-        point = match.group("point_num").strip()
-        title_candidate = match.group("title").strip()
-        # Проверяем, не начинается ли title с номера пункта, и если да, то удаляем его
-        if title_candidate.lower().startswith(point.lower()):
-             title = title_candidate[len(point):].strip(". ")
-        else:
-             title = title_candidate
-    elif page_content_text:
-        # Альтернативные, более простые regex, если основной не сработал
-        point_match = re.search(r"Пункт оглавления[:\s]*(\d+(\.\d+)*)", page_content_text, re.IGNORECASE)
-        title_match = re.search(r"Пункт оглавления[:\s]*\d+(\.\d+)*\.?\s*(.+)", page_content_text, re.IGNORECASE)
+    match = pattern.search(page_content_text)
 
-        if point_match and point_match.group(1):
-            point = point_match.group(1).strip()
-        if title_match and title_match.group(1):
-            title = title_match.group(1).strip()
-        elif page_content_text:
-            title = page_content_text[:150] + "..." if len(page_content_text) > 150 else page_content_text
+    if match:
+        section_candidate = match.group("section").strip()
+        point_candidate = match.group("point_num").strip()
+        title_candidate = match.group("title").strip() # .strip() уберет лишние пробелы вокруг названия
+
+        if section_candidate:
+            section = section_candidate
+        if point_candidate:
+            point = point_candidate
         
-        # Попробуем извлечь раздел отдельно, если он есть
-        section_match = re.search(r"Раздел[:\s]*(.*?)(Пункт оглавления|$)", page_content_text, re.IGNORECASE | re.DOTALL)
-        if section_match and section_match.group(1):
-            section = section_match.group(1).strip().rstrip(',')
+        if title_candidate: # Если что-то было захвачено как title и оно не пустое после strip
+            title = title_candidate
+        elif point_candidate: # Если title пуст (или только пробелы), но есть пункт
+            title = f"Наименование для пункта {point_candidate} не извлечено (возможно, отсутствует в исходном тексте)."
+        # Если и title_candidate пуст, и point_candidate не определен (хотя regex требует point_num),
+        # то title останется page_content_text.
+            
+    else:
+        # Если основной regex не сработал, пробуем извлечь хотя бы пункт и название без раздела
+        fallback_pattern = re.compile(
+            r"Пункт оглавления:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?"
+            r"\s*(?P<title>.*)",
+            re.IGNORECASE | re.DOTALL
+        )
+        fallback_match = fallback_pattern.search(page_content_text)
+        if fallback_match:
+            point_candidate = fallback_match.group("point_num").strip()
+            title_candidate = fallback_match.group("title").strip()
+
+            if point_candidate:
+                point = point_candidate
+            if title_candidate:
+                title = title_candidate
+            elif point_candidate: # Title пуст, но пункт есть
+                 title = f"Наименование для пункта {point_candidate} не извлечено (возможно, отсутствует в исходном тексте)."
+            # Раздел в этом случае останется "Раздел не определен" или можно попытаться найти его отдельно,
+            # но это усложнит логику без гарантии успеха, если формат сильно варьируется.
 
     return {
         "section": section,
         "point": point,
-        "title": title, # Это будет "наименование пункта спорной ситуации"
+        "title": title, # Это "наименование пункта спорной ситуации"
         "source": source,
+        "score": 0, # Инициализируем, будет перезаписано позже
         "full_content": page_content_text
     }
 
@@ -121,65 +126,59 @@ def find_relevant_situations(query, top_k=5):
     results = []
     for doc, score in docs_with_scores:
         info = extract_structured_info(doc.page_content, doc.metadata)
-        info["score"] = score
+        info["score"] = score # Оценка релевантности от Qdrant
         results.append(info)
     
-    results.sort(key=lambda x: x["score"], reverse=True) # Qdrant обычно возвращает уже отсортированными
+    # Qdrant обычно возвращает уже отсортированными по score (от большего к меньшему для similarity)
+    # Если нет, можно добавить results.sort(key=lambda x: x["score"], reverse=True)
     return results
 
 # --- Интерфейс Streamlit ---
 st.title("🔍 Поиск релевантных спорных налоговых ситуаций")
-st.write("Опишите вашу ситуацию, и система найдет соответствующие спорные вопросы в базе знаний")
+st.write("Опишите вашу ситуацию, и система найдет соответствующие наименования пунктов спорных ситуаций.")
 
 # Поле ввода запроса
 query = st.text_area("Опишите вашу ситуацию:", 
-                     placeholder="Опишите спорную ситуацию из вашей практики...",
+                     placeholder="Пример: Можно ли учесть расходы на такси для сотрудника в командировке...",
                      height=150)
 
+if "current_date" not in st.session_state:
+    st.session_state.current_date = datetime.date.today().strftime("%d.%m.%Y")
+
 # Кнопка поиска
-if st.button("Найти релевантные ситуации"):
+if st.button("Найти ситуации"):
     if not query:
         st.warning("Пожалуйста, опишите вашу ситуацию")
     else:
-        with st.spinner("Поиск релевантных ситуаций..."):
-            # Поиск релевантных ситуаций
-            situations = find_relevant_situations(query, top_k=5)
+        with st.spinner("Идет поиск релевантных наименований..."):
+            situations = find_relevant_situations(query, top_k=5) # Можете изменить top_k
             
             if not situations:
-                st.error("Не найдено релевантных ситуаций для вашего запроса")
+                st.error("Не найдено релевантных наименований пунктов для вашего запроса. Попробуйте переформулировать запрос.")
             else:
-                st.success(f"Найдено {len(situations)} релевантных ситуаций")
+                st.success(f"Найдено {len(situations)} релевантных наименований пунктов:")
                 
-                # Показать сырые результаты поиска
-                with st.expander("Просмотреть найденные ситуации"):
-                    for i, sit in enumerate(situations, 1):
-                        st.subheader(f"Ситуация #{i}")
-                        st.write(f"**Раздел:** {sit['section']}")
-                        st.write(f"**Пункт:** {sit['point']}")
-                        st.write(f"**Название:** {sit['title']}")
-                        st.write(f"**Источник:** {sit['source']}")
-                        st.write(f"**Релевантность:** {sit['score']:.2f}")
-                        st.divider()
-                
-                # Генерация аналитического отчета
-                with st.spinner("Анализируем результаты..."):
-                    report = generate_situation_report(situations, query)
-                
-                # Показать отчет
-                st.subheader("Аналитический отчет по найденным ситуациям")
-                st.markdown(report)
+                # Выводим только нумерованный список наименований пунктов
+                for i, sit in enumerate(situations, 1):
+                    # sit['title'] теперь должно содержать корректно извлеченное наименование пункта
+                    st.markdown(f"{i}. **{sit['title']}**")
+                    # Если хотите добавить немного больше информации (например, номер пункта и релевантность):
+                    # st.caption(f"   (Пункт документа: {sit['point']}, Релевантность: {sit['score']:.2f})")
+
 
 # Информация о системе
-st.sidebar.title("test")
-st.sidebar.info("""
-
-""")
-
+st.sidebar.title("О системе")
+st.sidebar.info(
+    """
+    Эта система выполняет поиск релевантных наименований
+    пунктов спорных налоговых ситуаций из базы знаний.
+    """
+)
 st.sidebar.divider()
-st.sidebar.markdown("""
+st.sidebar.markdown(f"""
 <div style='font-size: 0.875em; color: gray;'>
-    ©Prozorovskiy Dmitriy.
-    Date: {current_date}
+    © Prozorovskiy Dmitriy.
+    Дата: {st.session_state.current_date}
 </div>
-""".format(current_date=st.session_state.get("current_date", "01.03.2025")), 
+""", 
 unsafe_allow_html=True)

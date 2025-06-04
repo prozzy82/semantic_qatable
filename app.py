@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import datetime
 
-st.set_page_config(page_title="Поиск спорных налоговых ситуаций", layout="wide")
+st.set_page_config(page_title="Поиск в оглавлении", layout="wide")
 
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -198,16 +198,14 @@ if st.button("Найти ситуации"):
 st.sidebar.title("О системе")
 st.sidebar.info(
     """
-    Эта система выполняет поиск релевантных наименований
-    пунктов спорных налоговых ситуаций из базы знаний,
-    используя семантический поиск и переранжирование.
+    RAG + семантический поиск и переранжирование.
     """
 )
 st.sidebar.divider()
 st.sidebar.markdown(f"""
 <div style='font-size: 0.875em; color: gray;'>
     © Prozorovskiy Dmitriy.
-    Дата: {st.session_state.current_date}
+    Дата: 01.03.2025
 </div>
 """, 
 unsafe_allow_html=True)

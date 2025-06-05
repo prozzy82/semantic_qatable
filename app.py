@@ -15,8 +15,17 @@ from sentence_transformers import CrossEncoder
 load_dotenv(dotenv_path=".env")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = "enciclop"
 
+# Доступные коллекции в Qdrant по типам налогов
+AVAILABLE_COLLECTIONS = {
+    "Налог на прибыль": "enciclop",
+    "НДС": "enciclop_nds"
+}
+
+# Выбор налога (и коллекции) в боковой панели
+st.sidebar.title("Выбор налога")
+selected_tax = st.sidebar.selectbox("Выберите налог:", options=list(AVAILABLE_COLLECTIONS.keys()))
+selected_collection = AVAILABLE_COLLECTIONS[selected_tax]
 
 @st.cache_resource
 def get_embeddings():
@@ -26,7 +35,6 @@ def get_embeddings():
         encode_kwargs={'normalize_embeddings': True}
     )
 
-# 1. СОЗДАЕМ ЭКЗЕМПЛЯР МОДЕЛИ ЭМБЕДДИНГОВ
 embeddings_instance = get_embeddings()
 
 @st.cache_resource
@@ -35,22 +43,18 @@ def get_qdrant_client():
         url=QDRANT_URL, api_key=QDRANT_API_KEY, prefer_grpc=False
     )
 
-# 2. СОЗДАЕМ ЭКЗЕМПЛЯР КЛИЕНТА QDRANT
 qdrant_client_instance = get_qdrant_client()
 
 @st.cache_resource
-def get_vector_store():
-    # Эта функция теперь будет видеть определенную ранее embeddings_instance
+def get_vector_store(collection_name):
     return QdrantVectorStore(
         client=qdrant_client_instance,
-        collection_name=COLLECTION_NAME,
-        embedding=embeddings_instance, # Используем глобально определенную embeddings_instance
+        collection_name=collection_name,
+        embedding=embeddings_instance
     )
 
-# 3. СОЗДАЕМ ЭКЗЕМПЛЯР ВЕКТОРНОГО ХРАНИЛИЩА
-vector_store = get_vector_store()
+vector_store = get_vector_store(selected_collection)
 
-# Инициализация модели Cross-Encoder для переранжирования
 @st.cache_resource
 def get_reranker():
     model_name = 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1'
@@ -63,7 +67,6 @@ def get_reranker():
 
 reranker = get_reranker()
 
-# ... (остальная часть вашего кода: extract_structured_info, find_relevant_situations, интерфейс Streamlit) ...
 def extract_structured_info(page_content_text, metadata):
     source = metadata.get("source", "Источник не указан")
     section = "Раздел не определен"
@@ -73,8 +76,7 @@ def extract_structured_info(page_content_text, metadata):
     pattern = re.compile(
         r"Раздел:\s*(?P<section>.*?)\s*"
         r"Пункт оглавления:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?"
-        r"\s*(?P<title>.*)",
-        re.IGNORECASE | re.DOTALL
+        r"\s*(?P<title>.*)", re.IGNORECASE | re.DOTALL
     )
     match = pattern.search(page_content_text)
 
@@ -82,18 +84,16 @@ def extract_structured_info(page_content_text, metadata):
         section_candidate = match.group("section").strip()
         point_candidate = match.group("point_num").strip()
         title_candidate = match.group("title").strip()
-
         if section_candidate: section = section_candidate
         if point_candidate: point = point_candidate
-        
         if title_candidate:
             title = title_candidate
         elif point_candidate:
             title = f"Наименование для пункта {point_candidate} не извлечено."
     else:
         fallback_pattern = re.compile(
-            r"Пункт оглавления:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?"
-            r"\s*(?P<title>.*)", re.IGNORECASE | re.DOTALL
+            r"Пункт оглавления:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?\s*(?P<title>.*)",
+            re.IGNORECASE | re.DOTALL
         )
         fallback_match = fallback_pattern.search(page_content_text)
         if fallback_match:
@@ -103,13 +103,13 @@ def extract_structured_info(page_content_text, metadata):
             if title_candidate:
                 title = title_candidate
             elif point_candidate:
-                 title = f"Наименование для пункта {point_candidate} не извлечено."
+                title = f"Наименование для пункта {point_candidate} не извлечено."
+
     return {
         "section": section, "point": point, "title": title, "source": source,
         "score": 0, "full_content": page_content_text
     }
 
-# Функция для поиска релевантных ситуаций с переранжированием
 def find_relevant_situations(query, initial_top_k=20, final_top_k=7):
     docs_with_scores_qdrant = vector_store.similarity_search_with_score(query, k=initial_top_k)
     
@@ -153,14 +153,15 @@ def find_relevant_situations(query, initial_top_k=20, final_top_k=7):
     
     return reranked_docs_with_new_scores[:final_top_k]
 
-
 # --- Интерфейс Streamlit ---
 st.title("🔍 Поиск в оглавлении")
 st.write("Опишите вашу ситуацию, и система найдет соответствующие наименования пунктов спорных ситуаций.")
 
-query = st.text_area("Опишите вашу ситуацию:", 
-                     placeholder="Пример: нужно ли каждый месяц составлять акты оказанных услуг в рамках договора аренды",
-                     height=150)
+query = st.text_area(
+    "Опишите вашу ситуацию:",
+    placeholder="Пример: нужно ли каждый месяц составлять акты оказанных услуг в рамках договора аренды",
+    height=150
+)
 
 if "current_date" not in st.session_state:
     st.session_state.current_date = datetime.date.today().strftime("%d.%m.%Y")
@@ -176,7 +177,7 @@ if st.button("Найти ситуации"):
                 st.error("Не найдено релевантных наименований пунктов для вашего запроса. Попробуйте переформулировать запрос.")
             else:
                 st.success(f"Найдено {len(situations)} наиболее релевантных наименований пунктов:")
-                
+
                 for i, sit in enumerate(situations, 1):
                     st.markdown(f"**{i}. {sit['title']}**")
                     details_html = f"""
@@ -194,18 +195,13 @@ if st.button("Найти ситуации"):
                     else:
                         st.markdown("<br>", unsafe_allow_html=True)
 
-# Информация о системе
-st.sidebar.title("О системе")
-st.sidebar.info(
-    """
-    RAG + семантический поиск и переранжирование.
-    """
-)
+# Боковая панель
 st.sidebar.divider()
+st.sidebar.title("О системе")
+st.sidebar.info("RAG + семантический поиск + переранжирование")
 st.sidebar.markdown(f"""
 <div style='font-size: 0.875em; color: gray;'>
-    © Prozorovskiy Dmitriy.
+    © Prozorovskiy Dmitriy.<br>
     Дата: 01.03.2025
 </div>
-""", 
-unsafe_allow_html=True)
+""", unsafe_allow_html=True)

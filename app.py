@@ -75,7 +75,7 @@ def extract_structured_info(page_content_text, metadata):
 
     pattern = re.compile(
         r"Раздел:\s*(?P<section>.*?)\s*"
-        r"Пункт оглавления:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?"
+        r"Пункт:\s*(?P<point_num>\d[\d\.]*[\d])\s*\.?"
         r"\s*(?P<title>.*)", re.IGNORECASE | re.DOTALL
     )
     match = pattern.search(page_content_text)

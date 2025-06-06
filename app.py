@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import datetime
 
-st.set_page_config(page_title="Поиск в оглавлении", layout="wide")
+st.set_page_config(page_title="Поиск", layout="wide")
 
 from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -154,8 +154,8 @@ def find_relevant_situations(query, initial_top_k=20, final_top_k=7):
     return reranked_docs_with_new_scores[:final_top_k]
 
 # --- Интерфейс Streamlit ---
-st.title("🔍 Поиск в оглавлении")
-st.write("Опишите вашу ситуацию, и система найдет соответствующие наименования пунктов спорных ситуаций.")
+st.title("🔍 Поиск")
+st.write("Опишите вашу ситуацию")
 
 query = st.text_area(
     "Опишите вашу ситуацию:",
@@ -166,7 +166,7 @@ query = st.text_area(
 if "current_date" not in st.session_state:
     st.session_state.current_date = datetime.date.today().strftime("%d.%m.%Y")
 
-if st.button("Найти ситуации"):
+if st.button("Найти"):
     if not query:
         st.warning("Пожалуйста, опишите вашу ситуацию")
     else:
@@ -198,10 +198,10 @@ if st.button("Найти ситуации"):
 # Боковая панель
 st.sidebar.divider()
 st.sidebar.title("О системе")
-st.sidebar.info("RAG + семантический поиск + переранжирование")
+st.sidebar.info("xls RAG search")
 st.sidebar.markdown(f"""
 <div style='font-size: 0.875em; color: gray;'>
-    © Prozorovskiy Dmitriy.<br>
+    ©<br>
     Дата: 01.03.2025
 </div>
 """, unsafe_allow_html=True)
